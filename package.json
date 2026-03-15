@@ -1,0 +1,20 @@
+{
+  "name": "bookvoice",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "pdfjs-dist": "3.11.174",
+    "jszip": "^3.10.1",
+    "openai": "^4.52.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.3.4"
+  }
+}
