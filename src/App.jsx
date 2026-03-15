@@ -1,5 +1,5 @@
 // This app was built by CeeJay for Chinedum Aranotu – 2026
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import * as pdfjsLib from 'pdfjs-dist'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`
@@ -18,6 +18,17 @@ export default function App() {
   const speeds = [0.75, 1, 1.25, 1.5, 2]
   const [spdIdx, setSpdIdx] = useState(1)
   const synth = window.speechSynthesis
+  const [voice, setVoice] = useState('nova')
+  const [useOpenAI, setUseOpenAI] = useState(true)
+  const [audioQueue, setAudioQueue] = useState([])
+  const audioRef = useRef(null)
+
+  // Save progress whenever chapter/page changes
+  useEffect(() => {
+    if (!bookTitle || !chapters.length) return
+    const key = `bookvoice_${bookTitle.replace(/\s+/g, '_')}`
+    localStorage.setItem(key, JSON.stringify({ chIdx, pgIdx, timestamp: Date.now() }))
+  } , [chIdx, pgIdx, bookTitle])
 
   const handle = async (file) => {
     const ext = file.name.split('.').pop().toLowerCase()
@@ -31,8 +42,10 @@ export default function App() {
       if (!result.chapters.length) throw new Error('No readable content found.')
       setChapters(result.chapters)
       setTotalPages(result.totalPages)
-      setChIdx(0)
-      setPgIdx(0)
+      // ← Restore saved position
+      const { chIdx: savedCh, pgIdx: savedPg } = loadProgress(title, result.chapters)
+      setChIdx(savedCh)
+      setPgIdx(savedPg)
       setScreen('player')
     } catch (e) {
       setErrMsg(e.message)
@@ -117,6 +130,49 @@ export default function App() {
     return chs
   }
 
+  const speakWithOpenAI = async (text, spd) => {
+  try {
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice, speed: spd }),
+    })
+    if (!res.ok) throw new Error('TTS API failed')
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+
+    if (audioRef.current) {
+      audioRef.current.pause()
+      URL.revokeObjectURL(audioRef.current.src)
+    }
+
+    const audio = new Audio(url)
+    audioRef.current = audio
+    audio.playbackRate = spd
+    audio.play()
+    setPlaying(true)
+
+    audio.onended = () => {
+      URL.revokeObjectURL(url)
+      const ch = chapters[chIdx]
+      if (pgIdx < ch.pages.length - 1) {
+        setPgIdx(p => { const next = p + 1; speakWithOpenAI(ch.pages[next], spd); return next })
+      } else if (chIdx < chapters.length - 1) {
+        const nextCh = chIdx + 1
+        setChIdx(nextCh); setPgIdx(0)
+        speakWithOpenAI(chapters[nextCh].pages[0], spd)
+      } else {
+        setPlaying(false)
+      }
+    }
+    audio.onerror = () => { setPlaying(false); setUseOpenAI(false); readPage(chIdx, pgIdx) }
+  } catch (e) {
+    console.warn('OpenAI TTS failed, falling back to browser voice:', e)
+    setUseOpenAI(false)
+    readPage(chIdx, pgIdx)
+  }
+}
+
   const parseEPUB = async (file) => {
     setLoadMsg('Loading EPUB...')
     const JSZip = (await import('jszip')).default
@@ -156,6 +212,17 @@ export default function App() {
     return { chapters: chs, totalPages: pgCtr - 1 }
   }
 
+  const loadProgress = (title, chs) => {
+    const key = `bookvoice_${title.replace(/\s+/g, '_')}`
+    const saved = localStorage.getItem(key)
+    if (!saved) return { chIdx: 0, pgIdx: 0 }
+    const { chIdx: c, pgIdx: p } = JSON.parse(saved)
+    // Make sure saved position is still valid
+    if (c >= chs.length) return { chIdx: 0, pgIdx: 0 }
+    if (p >= chs[c].pages.length) return { chIdx: c, pgIdx: 0 }
+    return { chIdx: c, pgIdx: p }
+  } 
+
   const readPage = (chI, pgI) => {
     synth.cancel()
     const ch = chapters[chI]
@@ -181,8 +248,16 @@ export default function App() {
   }
 
   const togglePlay = () => {
-    if (playing) { synth.cancel(); setPlaying(false) }
-    else readPage(chIdx, pgIdx)
+    if (playing) {
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current = null }
+      synth.cancel()
+      setPlaying(false)
+    }   else {
+      const text = chapters[chIdx]?.pages[pgIdx]
+      if (!text) return
+      if (useOpenAI) speakWithOpenAI(text, rate)
+      else readPage(chIdx, pgIdx)
+    }
   }
 
   const prevPage = () => {
@@ -236,6 +311,7 @@ export default function App() {
 
       {screen === 'player' && ch && (
         <div>
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid #eee' }}>
             <div style={{ flex: 1, fontWeight: 500, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bookTitle}</div>
             <button onClick={() => { synth.cancel(); setPlaying(false); setScreen('upload') }} style={{ fontSize: 12, padding: '4px 10px', borderRadius: 6, border: '1px solid #ddd', background: 'none', cursor: 'pointer' }}>+ New book</button>
@@ -253,6 +329,22 @@ export default function App() {
             <div style={{ fontSize: 14, lineHeight: 1.8, color: '#222' }}>
               {ch.pages[pgIdx]}
             </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <label style={{ fontSize: 12, color: '#888' }}>Voice:</label>
+            <select value={voice} onChange={e => setVoice(e.target.value)}
+              style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid #ddd', background: '#fff' }}>
+              <option value="nova">Nova (warm female)</option>
+              <option value="shimmer">Shimmer (soft female)</option>
+              <option value="alloy">Alloy (neutral)</option>
+              <option value="echo">Echo (male)</option>
+              <option value="fable">Fable (expressive)</option>
+              <option value="onyx">Onyx (deep male)</option>
+            </select>
+            <span style={{ fontSize: 11, color: useOpenAI ? '#3a3' : '#888' }}>
+              {useOpenAI ? '● AI voice' : '● Browser voice'}
+            </span>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 12 }}>
