@@ -100,7 +100,24 @@ export default function App() {
         text  += item.str
         lastY  = item.transform[5]
       }
-      allPages.push({ n: i, text: text.trim() })
+      const trimmed = text.trim()
+      // Split long pages into ~500 char chunks
+      if (trimmed.length > 500) {
+        const words = trimmed.split(' ')
+        let chunk = ''
+        let subIdx = 0
+        for (const w of words) {
+          if ((chunk + ' ' + w).length > 500 && chunk) {
+            allPages.push({ n: i + subIdx * 0.001, text: chunk.trim() })
+            chunk = w; subIdx++
+          } else {
+            chunk += (chunk ? ' ' : '') + w
+          }
+        }
+        if (chunk.trim()) allPages.push({ n: i + subIdx * 0.001, text: chunk.trim() })
+      } else if (trimmed.length > 20) {
+        allPages.push({ n: i, text: trimmed })
+      }
     }
 
     setLoadMsg('Detecting chapters...')
@@ -222,7 +239,7 @@ export default function App() {
       const pgTxts = []
       let cur = ''
       for (const w of words) {
-        if ((cur + ' ' + w).length > 1200 && cur) { pgTxts.push(cur.trim()); cur = w }
+        if ((cur + ' ' + w).length > 500 && cur) { pgTxts.push(cur.trim()); cur = w }
         else cur += (cur ? ' ' : '') + w
       }
       if (cur.trim()) pgTxts.push(cur.trim())
@@ -239,15 +256,19 @@ export default function App() {
 
   // ─── OpenAI TTS (uses refs to avoid stale closures) ──────────────────────────
   const speakWithOpenAI = async (text, spd) => {
+    const trimmed = text.length > 800
+      ? text.substring(0, 800).replace(/\s+\S*$/, '') + '...'
+      : text
+
     try {
       const res = await fetch('/api/tts', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ text, voice: voiceRef.current, speed: spd }),
+        body:    JSON.stringify({ text: trimmed, voice: voiceRef.current, speed: spd }),
       })
       if (!res.ok) {
-        const errText = await res.text()   // ← get the real error
-        alert('TTS failed: ' + errText)    // ← show it
+        const errText = await res.text()
+        alert('TTS failed: ' + errText)
         throw new Error(errText)
       }
 
@@ -257,6 +278,8 @@ export default function App() {
         audioRef.current = null
       }
 
+      const blob = await res.blob()
+      const url  = URL.createObjectURL(blob)
       const audio = new Audio(url)
       audioRef.current = audio
       audio.play()
@@ -264,7 +287,6 @@ export default function App() {
 
       audio.onended = () => {
         URL.revokeObjectURL(url)
-        // Use refs here — state would be stale inside this callback
         const currentChs   = chaptersRef.current
         const currentChIdx = chIdxRef.current
         const currentPgIdx = pgIdxRef.current
@@ -289,6 +311,7 @@ export default function App() {
         setUseOpenAI(false)
         readPage(chIdxRef.current, pgIdxRef.current)
       }
+
     } catch (e) {
       alert('TTS Error: ' + e.message)
       console.warn('OpenAI TTS failed, falling back to browser voice:', e)
