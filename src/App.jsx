@@ -102,12 +102,12 @@ export default function App() {
       }
       const trimmed = text.trim()
       // Split long pages into ~500 char chunks
-      if (trimmed.length > 500) {
+      if (trimmed.length > 1200) {
         const words = trimmed.split(' ')
         let chunk = ''
         let subIdx = 0
         for (const w of words) {
-          if ((chunk + ' ' + w).length > 500 && chunk) {
+          if ((chunk + ' ' + w).length > 1200 && chunk) {
             allPages.push({ n: i + subIdx * 0.001, text: chunk.trim() })
             chunk = w; subIdx++
           } else {
@@ -239,7 +239,7 @@ export default function App() {
       const pgTxts = []
       let cur = ''
       for (const w of words) {
-        if ((cur + ' ' + w).length > 500 && cur) { pgTxts.push(cur.trim()); cur = w }
+        if ((cur + ' ' + w).length > 1200 && cur) { pgTxts.push(cur.trim()); cur = w }
         else cur += (cur ? ' ' : '') + w
       }
       if (cur.trim()) pgTxts.push(cur.trim())
@@ -256,8 +256,8 @@ export default function App() {
 
   // ─── OpenAI TTS (uses refs to avoid stale closures) ──────────────────────────
   const speakWithOpenAI = async (text, spd) => {
-    const trimmed = text.length > 500
-      ? text.substring(0, 500).replace(/\s+\S*$/, '') + '...'
+    const trimmed = text.length > 1200
+      ? text.substring(0, 1200).replace(/\s+\S*$/, '') + '...'
       : text
 
     try {
