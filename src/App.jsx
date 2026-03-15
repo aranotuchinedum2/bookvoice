@@ -32,7 +32,8 @@ export default function App() {
 
   const handle = async (file) => {
     const ext = file.name.split('.').pop().toLowerCase()
-    setBookTitle(file.name.replace(/\.(pdf|epub)$/i, ''))
+    const title = file.name.replace(/\.(pdf|epub)$/i, '')
+    setBookTitle(title)
     setScreen('loading')
     try {
       let result
@@ -42,7 +43,6 @@ export default function App() {
       if (!result.chapters.length) throw new Error('No readable content found.')
       setChapters(result.chapters)
       setTotalPages(result.totalPages)
-      // ← Restore saved position
       const { chIdx: savedCh, pgIdx: savedPg } = loadProgress(title, result.chapters)
       setChIdx(savedCh)
       setPgIdx(savedPg)
@@ -51,7 +51,7 @@ export default function App() {
       setErrMsg(e.message)
       setScreen('error')
       setTimeout(() => setScreen('upload'), 3000)
-    }
+    } 
   }
 
   const parsePDF = async (file) => {
