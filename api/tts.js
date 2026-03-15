@@ -1,29 +1,48 @@
-import OpenAI from 'openai';
-
-export const config = { runtime: 'edge' };
+// This app was built by CeeJay for Chinedum Aranotu – 2026
+export const config = { runtime: 'edge' }
 
 export default async function handler(req) {
-  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
 
-  const { text, voice = 'alloy', speed = 1.0 } = await req.json();
-  if (!text) return new Response('Missing text', { status: 400 });
-  // Limit text length for cost control
-  if (text.length > 4096) return new Response('Text too long', { status: 400 });
+  let body
+  try {
+    body = await req.json()
+  } catch {
+    return new Response('Invalid JSON', { status: 400 })
+  }
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const { text, voice = 'nova', speed = 1.0 } = body
 
-  const mp3 = await openai.audio.speech.create({
-    model: 'tts-1',
-    voice,       // alloy | echo | fable | onyx | nova | shimmer
-    input: text,
-    speed,
-  });
+  if (!text)              return new Response('Missing text',  { status: 400 })
+  if (text.length > 4096) return new Response('Text too long', { status: 400 })
 
-  const buffer = await mp3.arrayBuffer();
-  return new Response(buffer, {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) return new Response('OpenAI API key not configured', { status: 500 })
+
+  const response = await fetch('https://api.openai.com/v1/audio/speech', {
+    method:  'POST',
     headers: {
-      'Content-Type': 'audio/mpeg',
-      'Cache-Control': 'public, max-age=86400', // cache identical audio
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type':  'application/json',
     },
-  });
+    body: JSON.stringify({
+      model: 'tts-1',
+      voice,                                          // nova | shimmer | alloy | echo | fable | onyx
+      input: text,
+      speed: Math.min(Math.max(Number(speed), 0.25), 4.0),
+    }),
+  })
+
+  if (!response.ok) {
+    const err = await response.text()
+    return new Response(`OpenAI error: ${err}`, { status: response.status })
+  }
+
+  const audioBuffer = await response.arrayBuffer()
+  return new Response(audioBuffer, {
+    headers: {
+      'Content-Type':  'audio/mpeg',
+      'Cache-Control': 'public, max-age=86400',
+    },
+  })
 }
