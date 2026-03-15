@@ -245,9 +245,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ text, voice: voiceRef.current, speed: spd }),
       })
-      if (!res.ok) throw new Error('TTS API failed')
-      const blob = await res.blob()
-      const url  = URL.createObjectURL(blob)
+      if (!res.ok) {
+        const errText = await res.text()   // ← get the real error
+        alert('TTS failed: ' + errText)    // ← show it
+        throw new Error(errText)
+      }
 
       if (audioRef.current) {
         audioRef.current.pause()

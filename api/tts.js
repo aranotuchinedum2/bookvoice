@@ -12,22 +12,21 @@ export default async function handler(req) {
   }
 
   const { text, voice = 'nova', speed = 1.0 } = body
-
-  if (!text)              return new Response('Missing text',  { status: 400 })
+  if (!text) return new Response('Missing text', { status: 400 })
   if (text.length > 4096) return new Response('Text too long', { status: 400 })
 
   const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) return new Response('OpenAI API key not configured', { status: 500 })
+  if (!apiKey) return new Response('NO API KEY FOUND IN ENVIRONMENT', { status: 500 })
 
   const response = await fetch('https://api.openai.com/v1/audio/speech', {
-    method:  'POST',
+    method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
-      'Content-Type':  'application/json',
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify({
       model: 'tts-1',
-      voice,                                          // nova | shimmer | alloy | echo | fable | onyx
+      voice,
       input: text,
       speed: Math.min(Math.max(Number(speed), 0.25), 4.0),
     }),
@@ -35,13 +34,14 @@ export default async function handler(req) {
 
   if (!response.ok) {
     const err = await response.text()
-    return new Response(`OpenAI error: ${err}`, { status: response.status })
+    // Return the FULL OpenAI error so we can read it
+    return new Response(`OpenAI said: ${response.status} — ${err}`, { status: response.status })
   }
 
   const audioBuffer = await response.arrayBuffer()
   return new Response(audioBuffer, {
     headers: {
-      'Content-Type':  'audio/mpeg',
+      'Content-Type': 'audio/mpeg',
       'Cache-Control': 'public, max-age=86400',
     },
   })
