@@ -288,6 +288,7 @@ export default function App() {
         readPage(chIdxRef.current, pgIdxRef.current)
       }
     } catch (e) {
+      alert('TTS Error: ' + e.message)
       console.warn('OpenAI TTS failed, falling back to browser voice:', e)
       setUseOpenAI(false)
       readPage(chIdxRef.current, pgIdxRef.current)
