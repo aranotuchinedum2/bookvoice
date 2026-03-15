@@ -17,7 +17,6 @@ export default async function handler(req, res) {
 
   const { text, voice = 'nova', speed = 1.0 } = body
   if (!text) return res.status(400).send('Missing text')
-  if (text.length > 1000) return res.status(400).send('Text too long')
 
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) return res.status(500).send('No API key configured')

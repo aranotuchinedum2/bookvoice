@@ -256,8 +256,8 @@ export default function App() {
 
   // ─── OpenAI TTS (uses refs to avoid stale closures) ──────────────────────────
   const speakWithOpenAI = async (text, spd) => {
-    const trimmed = text.length > 800
-      ? text.substring(0, 800).replace(/\s+\S*$/, '') + '...'
+    const trimmed = text.length > 500
+      ? text.substring(0, 500).replace(/\s+\S*$/, '') + '...'
       : text
 
     try {
