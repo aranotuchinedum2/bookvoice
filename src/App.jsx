@@ -101,21 +101,7 @@ export default function App() {
         lastY  = item.transform[5]
       }
       const trimmed = text.trim()
-      // Split long pages into ~500 char chunks
-      if (trimmed.length > 500) {
-        const words = trimmed.split(' ')
-        let chunk = ''
-        let subIdx = 0
-        for (const w of words) {
-          if ((chunk + ' ' + w).length > 500 && chunk) {
-            allPages.push({ n: i + subIdx * 0.001, text: chunk.trim() })
-            chunk = w; subIdx++
-          } else {
-            chunk += (chunk ? ' ' : '') + w
-          }
-        }
-        if (chunk.trim()) allPages.push({ n: i + subIdx * 0.001, text: chunk.trim() })
-      } else if (trimmed.length > 20) {
+      if (trimmed.length > 20) {
         allPages.push({ n: i, text: trimmed })
       }
     }
@@ -239,7 +225,7 @@ export default function App() {
       const pgTxts = []
       let cur = ''
       for (const w of words) {
-        if ((cur + ' ' + w).length > 500 && cur) { pgTxts.push(cur.trim()); cur = w }
+        if ((cur + ' ' + w).length > 2000 && cur) { pgTxts.push(cur.trim()); cur = w }
         else cur += (cur ? ' ' : '') + w
       }
       if (cur.trim()) pgTxts.push(cur.trim())
