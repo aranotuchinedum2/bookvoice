@@ -19,16 +19,20 @@ export default function App() {
   const [rate, setRate]             = useState(1)
   const [spdIdx, setSpdIdx]         = useState(1)
   const [voice, setVoice]           = useState('nova')
+  // activeWordIdx: index into the words array of the current page being highlighted
+  const [activeWordIdx, setActiveWordIdx] = useState(-1)
   const speeds = [0.75, 1, 1.25, 1.5, 2]
   const synth  = window.speechSynthesis
 
   // Audio refs
-  const audioRef     = useRef(null)   // currently playing Audio element
-  const nextAudioRef = useRef(null)   // pre-fetched next chunk URL
-  const chunksRef    = useRef([])     // chunks for current page
-  const chunkIdxRef  = useRef(0)      // which chunk we're on
+  const audioRef       = useRef(null)
+  const nextAudioRef   = useRef(null)
+  const chunksRef      = useRef([])
+  const chunkIdxRef    = useRef(0)
+  // Track char offset of the start of the current chunk within the full page text
+  const chunkOffsetRef = useRef(0)
 
-  // Stable refs to avoid stale closures in callbacks
+  // Stable refs
   const chIdxRef    = useRef(chIdx)
   const pgIdxRef    = useRef(pgIdx)
   const chaptersRef = useRef(chapters)
@@ -50,7 +54,7 @@ export default function App() {
     localStorage.setItem(key, JSON.stringify({ chIdx, pgIdx, timestamp: Date.now() }))
   }, [chIdx, pgIdx, bookTitle])
 
-  // ─── Progress save/load ────────────────────────────────────────────────────
+  // ─── Progress ─────────────────────────────────────────────────────────────
   const loadProgress = (title, chs) => {
     try {
       const saved = localStorage.getItem(`bookvoice_${title.replace(/\s+/g, '_')}`)
@@ -66,19 +70,16 @@ export default function App() {
   const handle = async (file) => {
     const ext   = file.name.split('.').pop().toLowerCase()
     const title = file.name.replace(/\.(pdf|epub)$/i, '')
-    setBookTitle(title)
-    setScreen('loading')
+    setBookTitle(title); setScreen('loading')
     try {
       let result
       if (ext === 'pdf')       result = await parsePDF(file)
       else if (ext === 'epub') result = await parseEPUB(file)
       else throw new Error('Please upload a PDF or EPUB file.')
       if (!result.chapters.length) throw new Error('No readable content found.')
-      setChapters(result.chapters)
-      setTotalPages(result.totalPages)
+      setChapters(result.chapters); setTotalPages(result.totalPages)
       const { chIdx: c, pgIdx: p } = loadProgress(title, result.chapters)
-      setChIdx(c); setPgIdx(p)
-      chIdxRef.current = c; pgIdxRef.current = p
+      setChIdx(c); setPgIdx(p); chIdxRef.current = c; pgIdxRef.current = p
       setScreen('player')
     } catch (e) {
       setErrMsg(e.message); setScreen('error')
@@ -208,20 +209,27 @@ export default function App() {
     return { chapters: chs, totalPages: pgCtr - 1 }
   }
 
-  // ─── Split text into sentence-based chunks for audio ──────────────────────
-  const makeChunks = (text) => {
+  // ─── Chunk text at sentence boundaries ────────────────────────────────────
+  // Returns array of { text, charOffset } so we can map chunks back to char positions
+  const makeChunks = (fullText) => {
     const chunks    = []
-    const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text]
-    let chunk = ''
+    const sentences = fullText.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [fullText]
+    let chunk = '', offset = 0, chunkStart = 0
     for (const s of sentences) {
-      if ((chunk + s).length > 500 && chunk) { chunks.push(chunk.trim()); chunk = s }
-      else chunk += s
+      if ((chunk + s).length > 500 && chunk) {
+        chunks.push({ text: chunk.trim(), charOffset: chunkStart })
+        chunkStart = offset
+        chunk = s
+      } else {
+        chunk += s
+      }
+      offset += s.length
     }
-    if (chunk.trim()) chunks.push(chunk.trim())
+    if (chunk.trim()) chunks.push({ text: chunk.trim(), charOffset: chunkStart })
     return chunks
   }
 
-  // ─── Pre-fetch a chunk's audio in background ──────────────────────────────
+  // ─── Pre-fetch audio in background ────────────────────────────────────────
   const prefetchChunk = async (text) => {
     if (!text) return null
     try {
@@ -231,13 +239,13 @@ export default function App() {
         body:    JSON.stringify({ text, voice: voiceRef.current, speed: rateRef.current }),
       })
       if (!res.ok) return null
-      const blob = await res.blob()
-      return URL.createObjectURL(blob)
+      return URL.createObjectURL(await res.blob())
     } catch { return null }
   }
 
-  // ─── Advance to next page/chapter ─────────────────────────────────────────
+  // ─── Advance to next page after all chunks done ───────────────────────────
   const advancePage = () => {
+    setActiveWordIdx(-1)
     const chs = chaptersRef.current
     const ci  = chIdxRef.current
     const pi  = pgIdxRef.current
@@ -245,48 +253,42 @@ export default function App() {
     if (pi < ch.pages.length - 1) {
       const nextPg = pi + 1
       setPgIdx(nextPg); pgIdxRef.current = nextPg
-      startChunks(ch.pages[nextPg], 0)
+      startChunksFromChar(ch.pages[nextPg], 0)
     } else if (ci < chs.length - 1) {
       const nextCh = ci + 1
-      setChIdx(nextCh); setPgIdx(0)
-      chIdxRef.current = nextCh; pgIdxRef.current = 0
-      startChunks(chs[nextCh].pages[0], 0)
+      setChIdx(nextCh); setPgIdx(0); chIdxRef.current = nextCh; pgIdxRef.current = 0
+      startChunksFromChar(chs[nextCh].pages[0], 0)
     } else {
       setPlaying(false); setPaused(false)
       playingRef.current = false; pausedRef.current = false
     }
   }
 
-  // ─── Play chunks sequentially with pre-fetching ───────────────────────────
+  // ─── Core: play chunks from a given index ─────────────────────────────────
   const playChunks = async (chunks, startIdx) => {
     if (startIdx >= chunks.length) { advancePage(); return }
 
-    chunkIdxRef.current = startIdx
+    chunkIdxRef.current  = startIdx
+    chunkOffsetRef.current = chunks[startIdx].charOffset
 
-    // Use pre-fetched URL if ready, else fetch now
+    // Highlight the first word of this chunk in the UI
+    const fullText = chaptersRef.current[chIdxRef.current]?.pages[pgIdxRef.current] || ''
+    highlightWordAtChar(fullText, chunks[startIdx].charOffset)
+
     let url = nextAudioRef.current
     nextAudioRef.current = null
-    if (!url) url = await prefetchChunk(chunks[startIdx])
+    if (!url) url = await prefetchChunk(chunks[startIdx].text)
 
-    if (!url) {
-      // OpenAI failed — fall back to browser
-      readPageBrowser(chIdxRef.current, pgIdxRef.current)
-      return
-    }
+    if (!url) { readPageBrowser(chIdxRef.current, pgIdxRef.current); return }
 
-    // Pre-fetch NEXT chunk in background while this one plays — eliminates gaps
+    // Pre-fetch NEXT chunk while this one plays — eliminates gaps
     if (startIdx + 1 < chunks.length) {
-      prefetchChunk(chunks[startIdx + 1]).then(nextUrl => {
-        nextAudioRef.current = nextUrl
-      })
+      prefetchChunk(chunks[startIdx + 1].text).then(u => { nextAudioRef.current = u })
     }
 
-    // Clean up previous
     if (audioRef.current) {
-      audioRef.current.onended = null
-      audioRef.current.onerror = null
-      audioRef.current.pause()
-      audioRef.current = null
+      audioRef.current.onended = null; audioRef.current.onerror = null
+      audioRef.current.pause(); audioRef.current = null
     }
 
     const audio = new Audio(url)
@@ -295,13 +297,10 @@ export default function App() {
 
     audio.onended = () => {
       URL.revokeObjectURL(url)
-      if (playingRef.current && !pausedRef.current) {
-        playChunks(chunks, startIdx + 1)
-      }
+      if (playingRef.current && !pausedRef.current) playChunks(chunks, startIdx + 1)
     }
     audio.onerror = () => {
-      setPlaying(false); setPaused(false)
-      playingRef.current = false
+      setPlaying(false); playingRef.current = false
       readPageBrowser(chIdxRef.current, pgIdxRef.current)
     }
 
@@ -310,32 +309,103 @@ export default function App() {
     playingRef.current = true; pausedRef.current = false
   }
 
-  // ─── Start a page from a specific chunk index ─────────────────────────────
-  const startChunks = (text, fromChunkIdx) => {
-    const chunks = makeChunks(text)
+  // ─── Start from a specific character offset in the page text ──────────────
+  const startChunksFromChar = (fullText, charOffset) => {
+    const chunks = makeChunks(fullText)
     chunksRef.current = chunks
     if (nextAudioRef.current) { URL.revokeObjectURL(nextAudioRef.current); nextAudioRef.current = null }
-    playChunks(chunks, fromChunkIdx)
+
+    // Find the chunk that contains charOffset
+    let startIdx = 0
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      if (chunks[i].charOffset <= charOffset) { startIdx = i; break }
+    }
+    playChunks(chunks, startIdx)
   }
 
-  // ─── Browser TTS fallback ──────────────────────────────────────────────────
+  // ─── Highlight word at a character position ────────────────────────────────
+  const highlightWordAtChar = (fullText, charOffset) => {
+    const words = fullText.split(/\s+/)
+    let pos = 0, idx = 0
+    for (let i = 0; i < words.length; i++) {
+      if (pos >= charOffset) { idx = i; break }
+      pos += words[i].length + 1
+      idx = i
+    }
+    setActiveWordIdx(idx)
+  }
+
+  // ─── Click a word → read from that word ───────────────────────────────────
+  const handleWordClick = (wordIdx, words) => {
+    // Calculate char offset of this word in the full page text
+    let charOffset = 0
+    for (let i = 0; i < wordIdx; i++) charOffset += words[i].length + 1
+    setActiveWordIdx(wordIdx)
+    stopAll()
+    const fullText = chaptersRef.current[chIdxRef.current]?.pages[pgIdxRef.current]
+    if (!fullText) return
+    if (voiceRef.current === 'browser') {
+      // For browser voice, read from this word onwards
+      const remainingText = words.slice(wordIdx).join(' ')
+      readTextBrowser(remainingText)
+    } else {
+      startChunksFromChar(fullText, charOffset)
+    }
+  }
+
+  // ─── +10 / -10 second skip ─────────────────────────────────────────────────
+  const skipSeconds = (secs) => {
+    if (audioRef.current) {
+      // OpenAI audio — seek within current Audio element
+      const newTime = audioRef.current.currentTime + secs
+      if (newTime < 0) {
+        audioRef.current.currentTime = 0
+      } else if (newTime >= audioRef.current.duration) {
+        // Skip past end of chunk — advance to next chunk
+        audioRef.current.onended?.()
+      } else {
+        audioRef.current.currentTime = newTime
+      }
+    } else if (synth.speaking) {
+      // Browser voice — can't seek natively, so we restart
+      // from approximately the right word based on estimated reading speed
+      const wpm      = 150 * rateRef.current
+      const elapsed  = secs > 0
+        ? (audioRef.current?.currentTime || 0) + secs
+        : Math.max(0, (audioRef.current?.currentTime || 0) + secs)
+      const wordsSkip = Math.round((wpm / 60) * Math.abs(secs)) * (secs > 0 ? 1 : -1)
+      const fullText  = chaptersRef.current[chIdxRef.current]?.pages[pgIdxRef.current] || ''
+      const words     = fullText.split(/\s+/)
+      const newIdx    = Math.max(0, Math.min(words.length - 1, activeWordIdx + wordsSkip))
+      handleWordClick(newIdx, words)
+    }
+  }
+
+  // ─── Browser TTS ──────────────────────────────────────────────────────────
   const readPageBrowser = (chI, pgI) => {
-    synth.cancel()
-    const ch   = chaptersRef.current[chI]
-    if (!ch) return
-    const text = ch.pages[pgI]
+    const text = chaptersRef.current[chI]?.pages[pgI]
     if (!text?.trim()) return
-    const u    = new SpeechSynthesisUtterance(text)
-    u.rate     = rateRef.current
-    u.onstart  = () => { setPlaying(true); setPaused(false); playingRef.current = true }
-    u.onend    = () => {
+    readTextBrowser(text)
+  }
+
+  const readTextBrowser = (text) => {
+    synth.cancel()
+    const u   = new SpeechSynthesisUtterance(text)
+    u.rate    = rateRef.current
+    u.onstart = () => { setPlaying(true); setPaused(false); playingRef.current = true }
+    u.onboundary = (e) => {
+      if (e.name === 'word') {
+        const fullText = chaptersRef.current[chIdxRef.current]?.pages[pgIdxRef.current] || ''
+        highlightWordAtChar(fullText, e.charIndex)
+      }
+    }
+    u.onend = () => {
       const chs = chaptersRef.current; const ci = chIdxRef.current; const pi = pgIdxRef.current
       if (pi < chs[ci].pages.length - 1) {
         const next = pi + 1; setPgIdx(next); pgIdxRef.current = next; readPageBrowser(ci, next)
       } else if (ci < chs.length - 1) {
-        const nc = ci + 1; setChIdx(nc); setPgIdx(0)
-        chIdxRef.current = nc; pgIdxRef.current = 0; readPageBrowser(nc, 0)
-      } else { setPlaying(false); playingRef.current = false }
+        const nc = ci + 1; setChIdx(nc); setPgIdx(0); chIdxRef.current = nc; pgIdxRef.current = 0; readPageBrowser(nc, 0)
+      } else { setPlaying(false); playingRef.current = false; setActiveWordIdx(-1) }
     }
     u.onerror = (e) => { if (e.error !== 'interrupted') { setPlaying(false); playingRef.current = false } }
     synth.speak(u)
@@ -344,55 +414,40 @@ export default function App() {
   // ─── Stop everything ──────────────────────────────────────────────────────
   const stopAll = () => {
     if (audioRef.current) {
-      audioRef.current.onended = null
-      audioRef.current.onerror = null
-      audioRef.current.pause()
-      audioRef.current = null
+      audioRef.current.onended = null; audioRef.current.onerror = null
+      audioRef.current.pause(); audioRef.current = null
     }
     if (nextAudioRef.current) { URL.revokeObjectURL(nextAudioRef.current); nextAudioRef.current = null }
     synth.cancel()
     setPlaying(false); setPaused(false)
     playingRef.current = false; pausedRef.current = false
-    chunksRef.current  = []; chunkIdxRef.current = 0
+    chunksRef.current  = []; chunkIdxRef.current = 0; chunkOffsetRef.current = 0
+    setActiveWordIdx(-1)
   }
 
   // ─── Play / Pause / Resume ─────────────────────────────────────────────────
   const togglePlay = () => {
     if (playing) {
-      // PAUSE — keep audio element alive, just pause it
       if (audioRef.current) audioRef.current.pause()
       synth.pause()
       setPlaying(false); setPaused(true)
       playingRef.current = false; pausedRef.current = true
-
     } else if (paused) {
-      // RESUME — continue from exact position
       pausedRef.current = false; setPaused(false)
       if (audioRef.current) {
-        // Mid-chunk: HTML Audio remembers its position
-        audioRef.current.play()
-        setPlaying(true); playingRef.current = true
+        audioRef.current.play(); setPlaying(true); playingRef.current = true
       } else if (voiceRef.current === 'browser') {
-        synth.resume()
-        setPlaying(true); playingRef.current = true
+        synth.resume(); setPlaying(true); playingRef.current = true
       } else {
-        // Between chunks: resume from the chunk we were on
-        const chunks = chunksRef.current
-        const idx    = chunkIdxRef.current
-        if (chunks.length && idx < chunks.length) {
-          playChunks(chunks, idx)
-        } else {
-          const text = chaptersRef.current[chIdxRef.current]?.pages[pgIdxRef.current]
-          if (text) startChunks(text, 0)
-        }
+        const chunks = chunksRef.current; const idx = chunkIdxRef.current
+        if (chunks.length && idx < chunks.length) playChunks(chunks, idx)
+        else { const t = chaptersRef.current[chIdxRef.current]?.pages[pgIdxRef.current]; if (t) startChunksFromChar(t, 0) }
       }
-
     } else {
-      // FRESH START
       const text = chapters[chIdx]?.pages[pgIdx]
       if (!text) return
       if (voiceRef.current === 'browser') readPageBrowser(chIdx, pgIdx)
-      else startChunks(text, 0)
+      else startChunksFromChar(text, 0)
     }
   }
 
@@ -405,37 +460,57 @@ export default function App() {
       setChIdx(c); setPgIdx(p); chIdxRef.current = c; pgIdxRef.current = p
     }
   }
-
   const nextPage = () => {
     stopAll()
     const ch = chapters[chIdx]
     if (pgIdx < ch.pages.length - 1) { const p = pgIdx + 1; setPgIdx(p); pgIdxRef.current = p }
-    else if (chIdx < chapters.length - 1) {
-      const c = chIdx + 1; setChIdx(c); setPgIdx(0); chIdxRef.current = c; pgIdxRef.current = 0
-    }
+    else if (chIdx < chapters.length - 1) { const c = chIdx + 1; setChIdx(c); setPgIdx(0); chIdxRef.current = c; pgIdxRef.current = 0 }
   }
-
   const prevChapter = () => {
     stopAll()
     if (chIdx > 0) { const c = chIdx - 1; setChIdx(c); setPgIdx(0); chIdxRef.current = c; pgIdxRef.current = 0 }
   }
-
   const nextChapter = () => {
     stopAll()
     if (chIdx < chapters.length - 1) { const c = chIdx + 1; setChIdx(c); setPgIdx(0); chIdxRef.current = c; pgIdxRef.current = 0 }
   }
-
-  // ─── Speed change — applies instantly, no restart ─────────────────────────
   const cycleSpeed = () => {
-    const next    = (spdIdx + 1) % speeds.length
-    const newRate = speeds[next]
+    const next = (spdIdx + 1) % speeds.length; const newRate = speeds[next]
     setSpdIdx(next); setRate(newRate); rateRef.current = newRate
-    // Apply immediately to currently playing audio
     if (audioRef.current) audioRef.current.playbackRate = newRate
   }
 
   const ch = chapters[chIdx]
 
+  // ─── Render page text as clickable words ──────────────────────────────────
+  const renderPageText = (text) => {
+    if (!text) return null
+    const words = text.split(/(\s+)/)
+    let wordIdx = 0
+    return words.map((token, i) => {
+      if (/^\s+$/.test(token)) return <span key={i}>{token}</span>
+      const idx = wordIdx++
+      const isActive = idx === activeWordIdx
+      return (
+        <span
+          key={i}
+          onClick={() => handleWordClick(idx, text.split(/\s+/))}
+          style={{
+            cursor:        'pointer',
+            background:    isActive ? '#BA7517' : 'transparent',
+            color:         isActive ? '#fff' : 'inherit',
+            borderRadius:  isActive ? '3px' : '0',
+            padding:       isActive ? '0 2px' : '0',
+            transition:    'background 0.15s',
+          }}
+        >
+          {token}
+        </span>
+      )
+    })
+  }
+
+  // ─── UI ───────────────────────────────────────────────────────────────────
   return (
     <div style={{ maxWidth: 640, margin: '0 auto', padding: '2rem 1.5rem', fontFamily: 'system-ui, sans-serif' }}>
 
@@ -474,9 +549,7 @@ export default function App() {
 
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid #eee' }}>
-            <div style={{ flex: 1, fontWeight: 500, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {bookTitle}
-            </div>
+            <div style={{ flex: 1, fontWeight: 500, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{bookTitle}</div>
             <button onClick={() => { stopAll(); setScreen('upload') }}
               style={{ fontSize: 12, padding: '4px 10px', borderRadius: 6, border: '1px solid #ddd', background: 'none', cursor: 'pointer' }}>
               + New book
@@ -490,18 +563,28 @@ export default function App() {
             {chapters.map((c, i) => <option key={i} value={i}>{c.title}</option>)}
           </select>
 
-          {/* Full page content */}
+          {/* Page text — clickable words */}
           <div style={{ background: '#fdf8f0', border: '1px solid #f0e0c0', borderRadius: 10, padding: '1.25rem 1.5rem', marginBottom: 16, maxHeight: 280, overflowY: 'auto' }}>
             <div style={{ fontSize: 11, color: '#888', marginBottom: 8, fontFamily: 'monospace' }}>
               Page {ch.startPage + pgIdx} of {ch.endPage}
+              {activeWordIdx >= 0 && (
+                <span style={{ marginLeft: 8, color: '#BA7517' }}>● tap any word to read from there</span>
+              )}
             </div>
-            <div style={{ fontSize: 14, lineHeight: 1.8, color: '#222' }}>
-              {ch.pages[pgIdx]}
+            <div style={{ fontSize: 14, lineHeight: 1.9, color: '#222', userSelect: 'none' }}>
+              {renderPageText(ch.pages[pgIdx])}
             </div>
           </div>
 
-          {/* Voice picker — includes browser option */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          {/* Hint when not playing */}
+          {!playing && !paused && (
+            <div style={{ fontSize: 12, color: '#aaa', textAlign: 'center', marginBottom: 10 }}>
+              Tap any word in the text to start reading from there
+            </div>
+          )}
+
+          {/* Voice picker */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
             <label style={{ fontSize: 12, color: '#888' }}>Voice:</label>
             <select value={voice}
               onChange={e => { stopAll(); setVoice(e.target.value); voiceRef.current = e.target.value }}
@@ -519,20 +602,43 @@ export default function App() {
             </span>
           </div>
 
-          {/* Controls */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 12 }}>
+          {/* Controls row */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+
+            {/* Prev chapter */}
             <button onClick={prevChapter} style={btnStyle} title="Prev chapter">⏮</button>
-            <button onClick={prevPage}    style={btnStyle} title="Prev page">◀</button>
+
+            {/* Prev page */}
+            <button onClick={prevPage} style={btnStyle} title="Prev page">◀</button>
+
+            {/* -10s */}
+            <button onClick={() => skipSeconds(-10)} style={btnStyle} title="Back 10s">
+              <span style={{ fontSize: 10, fontWeight: 600, lineHeight: 1 }}>-10s</span>
+            </button>
+
+            {/* Play / Pause */}
             <button onClick={togglePlay}
-              style={{ ...btnStyle, width: 48, height: 48, background: '#BA7517', color: '#fff', border: 'none', fontSize: 18 }}>
+              style={{ ...btnStyle, width: 52, height: 52, background: '#BA7517', color: '#fff', border: 'none', fontSize: 20 }}>
               {playing ? '⏸' : '▶'}
             </button>
-            <button onClick={nextPage}    style={btnStyle} title="Next page">▶</button>
+
+            {/* +10s */}
+            <button onClick={() => skipSeconds(10)} style={btnStyle} title="Forward 10s">
+              <span style={{ fontSize: 10, fontWeight: 600, lineHeight: 1 }}>+10s</span>
+            </button>
+
+            {/* Next page */}
+            <button onClick={nextPage} style={btnStyle} title="Next page">▶</button>
+
+            {/* Next chapter */}
             <button onClick={nextChapter} style={btnStyle} title="Next chapter">⏭</button>
+
+            {/* Speed */}
             <button onClick={cycleSpeed}
               style={{ ...btnStyle, fontFamily: 'monospace', fontSize: 12, padding: '0 12px', width: 'auto' }}>
               {rate}×
             </button>
+
           </div>
 
           {/* Status */}
