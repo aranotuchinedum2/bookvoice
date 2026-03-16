@@ -24,7 +24,7 @@ Built for people who have more books than time to sit and read them.
 
 | Upload Screen | Player | Bookmarks |
 |---|---|---|
-| <img width="836" height="473" alt="Image" src="https://github.com/user-attachments/assets/047c591d-0854-4417-a031-3d8301643242" /> | <img width="658" height="230" alt="Image" src="https://github.com/user-attachments/assets/8a4c24ce-93f3-4117-87d6-e5bd89cdd1ea" | <img width="667" height="273" alt="Image" src="https://github.com/user-attachments/assets/0f084c68-b4b2-4a8c-afe6-62560243646e" /> /> |
+| <img width="836" height="473" alt="Image" src="https://github.com/user-attachments/assets/047c591d-0854-4417-a031-3d8301643242" /> | <img width="658" height="230" alt="Image" src="https://github.com/user-attachments/assets/8a4c24ce-93f3-4117-87d6-e5bd89cdd1ea" /> | <img width="667" height="273" alt="Image" src="https://github.com/user-attachments/assets/0f084c68-b4b2-4a8c-afe6-62560243646e" /> |
 
 ---
 
