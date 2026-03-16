@@ -24,7 +24,7 @@ Built for people who have more books than time to sit and read them.
 
 | Upload Screen | Player | Bookmarks |
 |---|---|---|
-| <img width="836" height="473" alt="Image" src="https://github.com/user-attachments/assets/047c591d-0854-4417-a031-3d8301643242" /> | Full player with word highlight | Save and jump to any moment |
+| <img width="836" height="473" alt="Image" src="https://github.com/user-attachments/assets/047c591d-0854-4417-a031-3d8301643242" /> | Full player with word highlight | <img width="658" height="230" alt="Image" src="https://github.com/user-attachments/assets/8a4c24ce-93f3-4117-87d6-e5bd89cdd1ea" /> |
 
 ---
 
