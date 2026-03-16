@@ -24,7 +24,7 @@ Built for people who have more books than time to sit and read them.
 
 | Upload Screen | Player | Bookmarks |
 |---|---|---|
-| Drop any PDF or EPUB | Full player with word highlight | Save and jump to any moment |
+| <img width="836" height="473" alt="Image" src="https://github.com/user-attachments/assets/047c591d-0854-4417-a031-3d8301643242" /> | Full player with word highlight | Save and jump to any moment |
 
 ---
 
