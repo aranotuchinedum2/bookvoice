@@ -102,12 +102,12 @@ export default function App() {
       }
       const trimmed = text.trim()
       // Split long pages into ~500 char chunks
-      if (trimmed.length > 1200) {
+      if (trimmed.length > 500) {
         const words = trimmed.split(' ')
         let chunk = ''
         let subIdx = 0
         for (const w of words) {
-          if ((chunk + ' ' + w).length > 1200 && chunk) {
+          if ((chunk + ' ' + w).length > 500 && chunk) {
             allPages.push({ n: i + subIdx * 0.001, text: chunk.trim() })
             chunk = w; subIdx++
           } else {
@@ -239,7 +239,7 @@ export default function App() {
       const pgTxts = []
       let cur = ''
       for (const w of words) {
-        if ((cur + ' ' + w).length > 1200 && cur) { pgTxts.push(cur.trim()); cur = w }
+        if ((cur + ' ' + w).length > 500 && cur) { pgTxts.push(cur.trim()); cur = w }
         else cur += (cur ? ' ' : '') + w
       }
       if (cur.trim()) pgTxts.push(cur.trim())
@@ -256,37 +256,24 @@ export default function App() {
 
   // ─── OpenAI TTS (uses refs to avoid stale closures) ──────────────────────────
   const speakWithOpenAI = async (text, spd) => {
-    const trimmed = text.length > 1200
-      ? text.substring(0, 1200).replace(/\s+\S*$/, '') + '...'
-      : text
-
-    try {
-      const res = await fetch('/api/tts', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ text: trimmed, voice: voiceRef.current, speed: spd }),
-      })
-      if (!res.ok) {
-        const errText = await res.text()
-        alert('TTS failed: ' + errText)
-        throw new Error(errText)
+    // Split full text into 500-char chunks at sentence boundaries
+    const chunks = []
+    const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text]
+    let chunk = ''
+    for (const sentence of sentences) {
+      if ((chunk + sentence).length > 500 && chunk) {
+        chunks.push(chunk.trim())
+        chunk = sentence
+      } else {
+        chunk += sentence
       }
+    }
+    if (chunk.trim()) chunks.push(chunk.trim())
 
-      if (audioRef.current) {
-        audioRef.current.pause()
-        URL.revokeObjectURL(audioRef.current.src)
-        audioRef.current = null
-      }
-
-      const blob = await res.blob()
-      const url  = URL.createObjectURL(blob)
-      const audio = new Audio(url)
-      audioRef.current = audio
-      audio.play()
-      setPlaying(true)
-
-      audio.onended = () => {
-        URL.revokeObjectURL(url)
+    // Play all chunks in sequence, then advance to next page
+    const playChunks = async (index) => {
+      if (index >= chunks.length) {
+        // All chunks done — advance to next page
         const currentChs   = chaptersRef.current
         const currentChIdx = chIdxRef.current
         const currentPgIdx = pgIdxRef.current
@@ -304,20 +291,54 @@ export default function App() {
         } else {
           setPlaying(false)
         }
+        return
       }
 
-      audio.onerror = () => {
-        setPlaying(false)
+      try {
+        const res = await fetch('/api/tts', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ text: chunks[index], voice: voiceRef.current, speed: spd }),
+        })
+
+        if (!res.ok) {
+          const errText = await res.text()
+          throw new Error(errText)
+        }
+
+        const blob  = await res.blob()
+        const url   = URL.createObjectURL(blob)
+        const audio = new Audio(url)
+
+        if (audioRef.current) {
+          audioRef.current.pause()
+          URL.revokeObjectURL(audioRef.current.src)
+          audioRef.current = null
+        }
+
+        audioRef.current = audio
+        audio.play()
+        setPlaying(true)
+
+        audio.onended = () => {
+          URL.revokeObjectURL(url)
+          playChunks(index + 1)  // ← play next chunk seamlessly
+        }
+
+        audio.onerror = () => {
+          setPlaying(false)
+          setUseOpenAI(false)
+          readPage(chIdxRef.current, pgIdxRef.current)
+        }
+
+      } catch (e) {
+        console.warn('OpenAI TTS failed, falling back to browser voice:', e)
         setUseOpenAI(false)
         readPage(chIdxRef.current, pgIdxRef.current)
       }
-
-    } catch (e) {
-      alert('TTS Error: ' + e.message)
-      console.warn('OpenAI TTS failed, falling back to browser voice:', e)
-      setUseOpenAI(false)
-      readPage(chIdxRef.current, pgIdxRef.current)
     }
+
+    playChunks(0)  // ← kick off from first chunk
   }
 
   // ─── Browser TTS fallback ────────────────────────────────────────────────────
